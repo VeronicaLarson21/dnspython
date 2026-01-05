@@ -2,6 +2,7 @@ from dnspy import build_query, DNSQuestion, DNSHeader, response
 from dataclasses import dataclass
 import struct 
 from io import BytesIO
+from typing import List
 #The response is going to be a DNS Record, which we need to define a class for
 #Inputs: name: byte string, domain name, type: int, unsure, class: int, allways 1 (internet), ttl: int, how long to cache query, data: byte string, the records content (ip address)
 @dataclass
@@ -30,6 +31,7 @@ def decode_name_broken(reader):
 #This is the name decoder taking into account compression
 def decode_name(reader):
     parts = []
+    #Checks if the first bit of the byte string is zero or not (if its not, its longer than 63 and is compressed)
     while(length := reader.read(1)[0]) != 0:
         if length & 0b1100_0000:
             parts.append(decode_compressed_name(length, reader))
@@ -40,7 +42,19 @@ def decode_name(reader):
 
 #Handles compression decoding
 def decode_compressed_name(length, reader):
-    pointer_bytes = bytes([length
+    #Takes bottom 6 bits of length byte+next one and convert to a pointer
+    pointer_bytes = bytes([length & 0b0011_1111]) + reader.read(1)
+    pointer = struct.unpack("!H",pointer_bytes)[0]
+    #Save current position in the reader
+    current_pos = reader.tell()
+    #Go to the pointer position
+    reader.seek(pointer)
+    #Decode the name at that position
+    result = decode_name(reader)
+    reader.seek(current_pos)
+    #Return the name
+    return result
+
 def parse_question(reader):
     name = decode_name_broken(reader)
     data = reader.read(4)
@@ -48,17 +62,25 @@ def parse_question(reader):
     return DNSQuestion(name, type_, class_)
 
 def parse_record(reader):
-    name = decode_name_broken(reader)
+    name = decode_name(reader)
     #Type, class, TTL, and len = 10 bytes (2+2+4+2 bytes respectively)
     data = reader.read(10)
     # I=4byte int, so !HHIH
     type_,class_,ttl,data_len = struct.unpack("!HHIH",data)
+    data = reader.read(data_len)
     return DNSRecord(name, type_, class_, ttl, data)
 
 #The reason why the other name decoding function fails is because DNS compresses the name which we have to take into account
 
+#Class for parsing the whole packet
 
-
+@dataclass
+class DNSPacket: 
+    header: DNSHeader
+    questions: List[DNSQuestion]
+    answers: List[DNSRecord]
+    authorities: List[DNSRecord]
+    additionals: List[DNSRecord]
 
 
 
